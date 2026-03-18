@@ -79,11 +79,149 @@ add_action( 'init', 'sparklab_courses_register_meta' );
 function sparklab_courses_add_meta_boxes() {
 	add_meta_box( 'sparklab_course_settings', 'Course Settings', 'sparklab_courses_settings_box', 'sparklab_course', 'side', 'high' );
 	add_meta_box( 'sparklab_course_quiz', 'Course Quiz', 'sparklab_courses_quiz_box', 'sparklab_course', 'normal', 'default' );
+	add_meta_box( 'sparklab_course_lessons', 'Course Lessons', 'sparklab_courses_lessons_box', 'sparklab_course', 'normal', 'high' );
 }
 add_action( 'add_meta_boxes', 'sparklab_courses_add_meta_boxes' );
 
+function sparklab_courses_get_modules( $course_id, $post_status = 'publish' ) {
+	return get_posts(
+		array(
+			'post_type'      => 'sparklab_course',
+			'post_parent'    => (int) $course_id,
+			'orderby'        => 'menu_order',
+			'order'          => 'ASC',
+			'posts_per_page' => -1,
+			'post_status'    => $post_status,
+		)
+	);
+}
+
+function sparklab_courses_build_course_overview_blocks( $course, $modules = array() ) {
+	$course_post = $course instanceof WP_Post ? $course : null;
+	$course_data = is_array( $course ) ? $course : array();
+
+	$course_title = $course_post ? $course_post->post_title : ( $course_data['title'] ?? 'Course' );
+	$excerpt      = $course_post ? $course_post->post_excerpt : ( $course_data['excerpt'] ?? '' );
+	$duration     = $course_post ? get_post_meta( $course_post->ID, '_sparklab_course_duration', true ) : ( $course_data['duration'] ?? '' );
+
+	if ( empty( $modules ) && $course_post ) {
+		$modules = sparklab_courses_get_modules( $course_post->ID, 'any' );
+	}
+
+	$blocks       = '';
+	$module_count = count( $modules );
+	$intro        = trim( (string) $excerpt );
+
+	if ( '' === $intro ) {
+		$intro = sprintf(
+			'%s includes %d lesson%s. Use the lesson posts below to edit the live course content shown on the frontend.',
+			$course_title,
+			$module_count,
+			1 === $module_count ? '' : 's'
+		);
+	}
+
+	$summary_items = array();
+	if ( '' !== trim( (string) $duration ) ) {
+		$summary_items[] = '<strong>Duration:</strong> ' . esc_html( $duration );
+	}
+	$summary_items[] = '<strong>Lessons:</strong> ' . intval( $module_count );
+	$summary_items[] = '<strong>Editing:</strong> Lesson content lives in child lesson posts. Open a lesson below to edit the blocks that appear on the frontend.';
+
+	$blocks .= sparklab_courses_wrap_block( 'heading', '<h2>Course Overview</h2>', array( 'level' => 2 ) );
+	$blocks .= sparklab_courses_wrap_block( 'paragraph', '<p>' . esc_html( $intro ) . '</p>' );
+
+	if ( ! empty( $summary_items ) ) {
+		$list_html = '';
+		foreach ( $summary_items as $item ) {
+			$list_html .= '<li>' . $item . '</li>';
+		}
+		$blocks .= sparklab_courses_wrap_block( 'list', '<ul class="wp-block-list">' . $list_html . '</ul>' );
+	}
+
+	$blocks .= sparklab_courses_wrap_block( 'heading', '<h3>Lesson Outline</h3>', array( 'level' => 3 ) );
+
+	if ( empty( $modules ) ) {
+		$blocks .= sparklab_courses_wrap_block( 'paragraph', '<p>No lessons have been added to this course yet.</p>' );
+		return trim( $blocks );
+	}
+
+	$lesson_items = '';
+	foreach ( $modules as $index => $module ) {
+		$title = '';
+
+		if ( $module instanceof WP_Post ) {
+			$title = $module->post_title;
+		} elseif ( is_array( $module ) ) {
+			$title = $module['title'] ?? '';
+		}
+
+		$title = trim( (string) $title );
+		if ( '' === $title ) {
+			continue;
+		}
+
+		$lesson_items .= '<li><strong>Lesson ' . intval( $index + 1 ) . ':</strong> ' . esc_html( $title ) . '</li>';
+	}
+
+	if ( '' !== $lesson_items ) {
+		$blocks .= sparklab_courses_wrap_block(
+			'list',
+			'<ol class="wp-block-list">' . $lesson_items . '</ol>',
+			array( 'ordered' => true )
+		);
+	}
+
+	$blocks .= sparklab_courses_wrap_block(
+		'paragraph',
+		'<p>This overview is for backend organization only. The frontend course layout and lesson pages continue to use the existing course template.</p>'
+	);
+
+	return trim( $blocks );
+}
+
+function sparklab_courses_sync_course_overview_content( $course_id ) {
+	$course_id = (int) $course_id;
+	if ( $course_id <= 0 ) {
+		return false;
+	}
+
+	$course_post = get_post( $course_id );
+	if ( ! $course_post instanceof WP_Post || 'sparklab_course' !== $course_post->post_type || (int) $course_post->post_parent > 0 ) {
+		return false;
+	}
+
+	$content = sparklab_courses_build_course_overview_blocks( $course_post );
+	if ( '' === $content || $content === trim( (string) $course_post->post_content ) ) {
+		return false;
+	}
+
+	$result = wp_update_post(
+		wp_slash(
+			array(
+				'ID'           => $course_id,
+				'post_content' => $content,
+			)
+		),
+		true
+	);
+
+	return ! is_wp_error( $result );
+}
+
 function sparklab_courses_settings_box( $post ) {
 	wp_nonce_field( 'sparklab_course_save', 'sparklab_course_nonce' );
+
+	if ( $post->post_parent > 0 ) {
+		$parent = get_post( $post->post_parent );
+		?>
+		<p class="description">Duration and icon settings are managed on the parent course.</p>
+		<?php if ( $parent ) : ?>
+		<p><a href="<?php echo esc_url( get_edit_post_link( $parent->ID, 'raw' ) ); ?>">Edit <?php echo esc_html( $parent->post_title ); ?></a></p>
+		<?php endif; ?>
+		<?php
+		return;
+	}
 
 	$duration = get_post_meta( $post->ID, '_sparklab_course_duration', true );
 	$icon     = get_post_meta( $post->ID, '_sparklab_course_icon', true ) ?: 'shield';
@@ -115,6 +253,17 @@ function sparklab_courses_settings_box( $post ) {
 }
 
 function sparklab_courses_quiz_box( $post ) {
+	if ( $post->post_parent > 0 ) {
+		$parent = get_post( $post->post_parent );
+		?>
+		<p class="description">Quiz settings are managed on the parent course.</p>
+		<?php if ( $parent ) : ?>
+		<p><a href="<?php echo esc_url( get_edit_post_link( $parent->ID, 'raw' ) ); ?>">Edit <?php echo esc_html( $parent->post_title ); ?></a></p>
+		<?php endif; ?>
+		<?php
+		return;
+	}
+
 	$question     = get_post_meta( $post->ID, '_sparklab_course_quiz_question', true );
 	$options_json = get_post_meta( $post->ID, '_sparklab_course_quiz_options', true ) ?: '[]';
 	$options      = json_decode( $options_json, true );
@@ -147,6 +296,61 @@ function sparklab_courses_quiz_box( $post ) {
 				</select>
 			</td>
 		</tr>
+	</table>
+	<?php
+}
+
+function sparklab_courses_lessons_box( $post ) {
+	if ( $post->post_parent > 0 ) {
+		$parent = get_post( $post->post_parent );
+		?>
+		<p class="description">This lesson is stored as Gutenberg content and powers the live lesson page on the frontend.</p>
+		<?php if ( $parent ) : ?>
+		<p><strong>Parent course:</strong> <a href="<?php echo esc_url( get_edit_post_link( $parent->ID, 'raw' ) ); ?>"><?php echo esc_html( $parent->post_title ); ?></a></p>
+		<?php endif; ?>
+		<p><a class="button button-secondary" href="<?php echo esc_url( get_permalink( $post ) ); ?>" target="_blank" rel="noopener noreferrer">View Lesson</a></p>
+		<?php
+		return;
+	}
+
+	$modules = sparklab_courses_get_modules( $post->ID, array( 'publish', 'draft', 'pending', 'private', 'future' ) );
+	?>
+	<p class="description">Each lesson below is a separate WordPress post with its own Gutenberg block content. Edit a lesson to change what appears on the live frontend.</p>
+	<?php if ( empty( $modules ) ) : ?>
+	<p>No lessons have been created for this course yet.</p>
+	<?php return; endif; ?>
+	<table class="widefat striped">
+		<thead>
+			<tr>
+				<th>Lesson</th>
+				<th>Status</th>
+				<th>Blocks</th>
+				<th>Words</th>
+				<th>Actions</th>
+			</tr>
+		</thead>
+		<tbody>
+			<?php foreach ( $modules as $index => $module ) : ?>
+				<?php
+				$block_count = count( parse_blocks( $module->post_content ) );
+				$word_count  = str_word_count( wp_strip_all_tags( $module->post_content ) );
+				?>
+			<tr>
+				<td>
+					<strong><?php echo intval( $index + 1 ); ?>.</strong>
+					<?php echo esc_html( $module->post_title ); ?>
+				</td>
+				<td><?php echo esc_html( ucfirst( $module->post_status ) ); ?></td>
+				<td><?php echo intval( $block_count ); ?></td>
+				<td><?php echo intval( $word_count ); ?></td>
+				<td>
+					<a href="<?php echo esc_url( get_edit_post_link( $module->ID, 'raw' ) ); ?>">Edit</a>
+					|
+					<a href="<?php echo esc_url( get_permalink( $module ) ); ?>" target="_blank" rel="noopener noreferrer">View</a>
+				</td>
+			</tr>
+			<?php endforeach; ?>
+		</tbody>
 	</table>
 	<?php
 }
@@ -957,23 +1161,20 @@ function sparklab_courses_import_from_html( $source_path = '' ) {
 		$imported_modules = 0;
 		$course_ids       = array();
 
-		foreach ( $parsed as $course_data ) {
-			$parent_id = wp_insert_post(
-				wp_slash(
-					array(
-						'post_type'    => 'sparklab_course',
-						'post_title'   => $course_data['title'],
-						'post_name'    => sanitize_title( $course_data['level_key'] ),
-						'post_excerpt' => $course_data['excerpt'],
-						'post_status'  => 'publish',
-						'menu_order'   => (int) $course_data['order'],
-						'post_content' => sparklab_courses_wrap_block(
-							'paragraph',
-							'<p>Bambu Lab A1 Academy ' . esc_html( $course_data['title'] ) . ' level.</p>'
-						),
+			foreach ( $parsed as $course_data ) {
+				$parent_id = wp_insert_post(
+					wp_slash(
+						array(
+							'post_type'    => 'sparklab_course',
+							'post_title'   => $course_data['title'],
+							'post_name'    => sanitize_title( $course_data['level_key'] ),
+							'post_excerpt' => $course_data['excerpt'],
+							'post_status'  => 'publish',
+							'menu_order'   => (int) $course_data['order'],
+							'post_content' => '',
+						)
 					)
-				)
-			);
+				);
 
 			if ( is_wp_error( $parent_id ) || ! $parent_id ) {
 				return is_wp_error( $parent_id ) ? $parent_id : new WP_Error( 'sparklab_courses_insert_failed', 'Failed to create course post.' );
@@ -985,28 +1186,30 @@ function sparklab_courses_import_from_html( $source_path = '' ) {
 			update_post_meta( $parent_id, '_sparklab_course_duration', $course_data['duration'] );
 			update_post_meta( $parent_id, '_sparklab_course_icon', $course_data['icon'] );
 
-			foreach ( $course_data['modules'] as $module_data ) {
-				$child_id = wp_insert_post(
-					wp_slash(
-						array(
-							'post_type'    => 'sparklab_course',
-							'post_title'   => $module_data['title'],
-							'post_name'    => $module_data['slug'],
-							'post_parent'  => $parent_id,
-							'post_status'  => 'publish',
-							'menu_order'   => (int) $module_data['order'],
-							'post_content' => $module_data['content'],
+				foreach ( $course_data['modules'] as $module_data ) {
+					$child_id = wp_insert_post(
+						wp_slash(
+							array(
+								'post_type'    => 'sparklab_course',
+								'post_title'   => $module_data['title'],
+								'post_name'    => $module_data['slug'],
+								'post_parent'  => $parent_id,
+								'post_status'  => 'publish',
+								'menu_order'   => (int) $module_data['order'],
+								'post_content' => $module_data['content'],
+							)
 						)
-					)
-				);
+					);
 
 				if ( is_wp_error( $child_id ) || ! $child_id ) {
 					return is_wp_error( $child_id ) ? $child_id : new WP_Error( 'sparklab_courses_insert_failed', 'Failed to create lesson post.' );
 				}
 
-				$imported_modules++;
+					$imported_modules++;
+				}
+
+				sparklab_courses_sync_course_overview_content( $parent_id );
 			}
-		}
 
 		flush_rewrite_rules();
 
