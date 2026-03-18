@@ -191,9 +191,39 @@
     });
   }
 
+  /* ─── Lite YouTube embeds ─── */
+
+  function initLiteVideos() {
+    document.querySelectorAll('.slc-lite-video[data-youtube-src]').forEach(function (shell) {
+      var button = shell.querySelector('.slc-lite-video__button');
+      if (!button) return;
+
+      button.addEventListener('click', function () {
+        if (shell.classList.contains('is-loaded')) return;
+
+        var src = shell.getAttribute('data-youtube-src');
+        if (!src) return;
+
+        var iframe = document.createElement('iframe');
+        iframe.src = src + (src.indexOf('?') === -1 ? '?' : '&') + 'autoplay=1';
+        iframe.title = shell.getAttribute('data-youtube-title') || 'YouTube video';
+        iframe.setAttribute('frameborder', '0');
+        iframe.setAttribute('allow', 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share');
+        iframe.setAttribute('allowfullscreen', '');
+        iframe.setAttribute('loading', 'lazy');
+        iframe.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+
+        shell.innerHTML = '';
+        shell.appendChild(iframe);
+        shell.classList.add('is-loaded');
+      }, { once: true });
+    });
+  }
+
   /* ─── Init ─── */
   updateProgressUI();
   initQuiz();
   initMobileNav();
+  initLiteVideos();
 
 })();
